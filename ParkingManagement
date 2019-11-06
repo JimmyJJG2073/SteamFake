@@ -1,0 +1,686 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Web;
+using System.Web.Mvc;
+using System.Data;
+using ParkingManagement.Models;
+using ParkingManagement.Ref;
+using Newtonsoft.Json;
+using System.IO;
+using OfficeOpenXml;
+using OfficeOpenXml.Style;
+
+namespace ParkingManagement.Controllers
+{
+    public class ParkingController : Controller
+    {
+        // GET: Parking
+        public ActionResult Index()
+        {
+            ViewBag.UL = "Parking";
+            ViewBag.page = "Parking_Index";
+            return View();
+        }
+        public ActionResult EditTool()
+        {
+            ViewBag.UL = "Parking";
+            ViewBag.page = "Parking_EditTool";
+            return View();
+        }
+        public ActionResult CancelList()
+        {
+            ViewBag.UL = "Parking";
+            ViewBag.page = "Parking_CancelList";
+            return View();
+        }
+
+        public ActionResult CustomerInfo()
+        {
+            ViewBag.UL = "Parking";
+            ViewBag.page = "Parking_CustomerInfo";
+            return View();
+        }
+        public ActionResult RentReport()
+        {
+            ViewBag.UL = "Parking";
+            ViewBag.page = "Parking_RentReport";
+            return View();
+        }
+        [HttpPost]
+        public string Post_ParkingData(ParkingPlaceData PPD)
+        {
+            string output = "";
+            switch (PPD.Action)
+            {
+                case "AddLayoutItem":
+                    AddLayoutItem(PPD);
+                    break;
+                case "LoadItemData":
+                    output = JsonConvert.SerializeObject(LoadItemData(PPD));
+                    break;
+            }
+            return output;
+        }
+        [HttpPost]
+        public string Post_CustomerData(CustomerData CD)
+        {
+            string output = "";
+            switch (CD.Action)
+            {
+                case "GetCustomerData":
+                    output = JsonConvert.SerializeObject(GetCustomerData(CD));
+                    break;
+                case "Add_Customer":
+                    Add_Customer(CD);
+                    break;
+                case "Edit_Customer":
+                    Add_Customer(CD);
+                    break;
+                case "Delete_Customer":
+                    Delete_Customer(CD);
+                    break;
+                case "getEnable":
+                    output = JsonConvert.SerializeObject(GetCustomerData(CD));
+                    break;
+                case "GetCancelData":
+                    output = JsonConvert.SerializeObject(GetCancelData(CD));
+                    break;
+                case "UpdateCancelData":
+                    UpdateCancelData(CD);
+                    break;
+            }
+            return output;
+        }
+        [HttpPost]
+        public string Post_RentData(RentData RD)
+        {
+            string output = "";
+            switch (RD.Action)
+            {
+                case "GetRentData":
+                    output = JsonConvert.SerializeObject(GetRentData(RD));
+                    break;
+            }
+            return output;
+        }
+        public void UpdateCancelData(CustomerData CD)
+        {
+            string sql = String.Format("UPDATE [GeneralAffairs].[dbo].[Parking_Cancel] SET OwerName ='{3}',OwnerEPID ='{4}',CostCenter ='{5}', CardNum ='{6}', Dept = '{7}' , HireType = '{8}' , LicensePlateNum1 ='{9}' , LicensePlateNum2 ='{10}' , CardActiveDate ='{11}' ,RentDate = '{12}',CancelDate='{13}',Remark='{14}'  WHERE ParkingFloor ='{0}' AND ParkingType ='{1}' AND ParkingNum ='{2}'; ", CD.ParkingFloor, CD.ParkingType, CD.ParkingNum, CD.OwerName, CD.OwnerEPID, CD.CostCenter, CD.CardNum, CD.Dept, CD.HireType, CD.LicensePlateNum1, CD.LicensePlateNum2, CD.CardActiveDate, CD.RentDate,CD.CancelDate,CD.Remark);
+            OutputFormat OF = DBHelper.GetDate(sql);
+        }
+        public ActionResult Export(RentData RD)
+        {
+            RD.Action = "GetRentData";
+            using (ExcelPackage package = new ExcelPackage())
+            {
+                // 新增worksheet
+                ExcelWorksheet ws = package.Workbook.Worksheets.Add("sheet");
+                // 取得Sample DataTable資料
+                DataTable dt = GetRentData2(RD);
+
+                // 將DataTable資料塞到sheet中
+                ws.Cells["A1"].LoadFromDataTable(dt, true);
+                var stream = new MemoryStream();
+                package.SaveAs(stream);
+                string now = DateTime.Now.ToString("yyyyMMddhhmmss");
+                string fileName = now+"停車費.xlsx";
+                string contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                stream.Position = 0;
+                return File(stream, contentType, fileName);
+            }
+        }
+        public DataTable GetRentData(RentData RD)
+        {
+            DataTable RentTable = new DataTable();
+            RentTable.Columns.Add("No", typeof(String));
+            RentTable.Columns.Add("OwerName", typeof(String));
+            RentTable.Columns.Add("OwnerEPID", typeof(String));
+            RentTable.Columns.Add("CostCenter", typeof(String));
+            RentTable.Columns.Add("SelfPayment", typeof(String));
+            RentTable.Columns.Add("SubsidyVAT", typeof(String));
+            RentTable.Columns.Add("Subsidy", typeof(String));
+            RentTable.Columns.Add("TotalPayment", typeof(String));
+            RentTable.Columns.Add("ParkingType", typeof(String));
+            RentTable.Columns.Add("RentDate", typeof(String));
+            RentTable.Columns.Add("DeptType", typeof(String));
+            RentTable.Columns.Add("HireType", typeof(String));
+            
+            string sql = "";
+            DateTime now = DateTime.Now;
+            List<string> LastMon_EPlist = new List<string>();
+            List<string> NowMon_EPlist = new List<string>();
+            string Last_M16_FirstDay = DateTime.Now.AddMonths(-1).ToString("yyyy-MM-16");
+            string Last_M_LastDay = DateTime.Now.AddDays(-DateTime.Now.AddMonths(1).Day).ToString("yyyy-MM-dd");
+            string Now_M_FirstDay = DateTime.Now.AddDays(-DateTime.Now.Day + 1).ToString("yyyy-MM-dd");
+            string Now_M15_FirstDay = DateTime.Now.AddDays(-DateTime.Now.Day + 1).ToString("yyyy-MM-15");
+            string Now_M_LastDay = DateTime.Now.AddMonths(1).AddDays(-DateTime.Now.AddMonths(1).Day).ToString("yyyy-MM-dd");
+
+            int self_Payment = 0;
+            int Subsidy = 0;
+            int SubsidyVAT = 0;
+            int CAR_Rent = 750;
+            int CAR_Subsidy = 450;
+            int Scooter_Rent = 100;
+            int Scooter_Subsidy = 100;
+            int No = 0;
+            //0.找出當月15號前退租資料
+            sql = String.Format("SELECT * FROM [GeneralAffairs].[dbo].[Parking_Cancel] WHERE CancelDate between '{0}' and '{1}'", Now_M_FirstDay, Now_M15_FirstDay);
+            OutputFormat Cancel_OF = DBHelper.GetDate(sql);
+            foreach (DataRow row in Cancel_OF.OutputTable.Rows)
+            {
+                No++;
+                string OwerName = row["OwerName"].ToString();
+                string ParkingType_str = "";
+                string ParkingType = row["ParkingType"].ToString();
+                string OwnerEPID = row["OwnerEPID"].ToString();
+                string CostCenter = row["CostCenter"].ToString();
+                string HireType = row["HireType"].ToString();
+                string RentDate = row["RentDate"].ToString();
+                string Remark = row["Remark"].ToString();
+                string CancelDate = row["CancelDate"].ToString();
+                string []CancelDate_arr = CancelDate.Split('-');
+
+                double days = Convert.ToInt32(CancelDate_arr[2]);
+                int TotalDays = DateTime.DaysInMonth(DateTime.Today.Year, DateTime.Today.Month);
+                double AvgRent = 0;
+                double AvgSubsidy = 0;
+                if (ParkingType == "CAR")
+                {
+                    ParkingType_str = "汽車";
+                    AvgRent = (CAR_Rent / TotalDays);
+                    AvgSubsidy = (CAR_Subsidy / TotalDays);
+                }
+                else
+                {
+                    ParkingType_str = "機車";
+                    AvgRent = Scooter_Rent / TotalDays;
+                    AvgSubsidy = Scooter_Subsidy / TotalDays;
+                }
+                self_Payment = (int)(Math.Round((days*AvgRent),0));
+                SubsidyVAT = (int)(Math.Round((days * AvgSubsidy), 0)); 
+                Subsidy = (int)(Math.Round((days * (AvgSubsidy/1.05)), 0));
+                DataRow NewRow = RentTable.NewRow();
+                NewRow["No"] = No;
+                NewRow["OwerName"] = OwerName;
+                NewRow["OwnerEPID"] = OwnerEPID;
+                NewRow["CostCenter"] = CostCenter;
+                NewRow["SelfPayment"] = self_Payment;
+                NewRow["SubsidyVAT"] = SubsidyVAT;
+                NewRow["Subsidy"] = Subsidy;
+                NewRow["TotalPayment"] = self_Payment + SubsidyVAT;
+                NewRow["ParkingType"] = ParkingType_str;
+                NewRow["RentDate"] = RentDate;
+                NewRow["DeptType"] = "";
+                NewRow["HireType"] = HireType+" 退租日:"+ CancelDate+" "+ Remark;
+                RentTable.Rows.Add(NewRow);
+            }
+            //1.找出上個月16號以後起租的資料-> (月費/月總天數)*(月底日-起租日) 
+            sql = String.Format("SELECT OwnerEPID FROM [GeneralAffairs].[dbo].[Parking_Main] WHERE RentDate between '{0}' and '{1}'", Last_M16_FirstDay, Last_M_LastDay);
+            OutputFormat OF = DBHelper.GetDate(sql);
+            foreach(DataRow row in OF.OutputTable.Rows)
+            {
+                string OwnerEPID = row["OwnerEPID"].ToString();
+                LastMon_EPlist.Add(OwnerEPID);
+            }
+            
+            //2.找出當月15以前起租的資料-> (月費/月總天數)*(月底日-起租日) 
+            sql = String.Format("SELECT OwnerEPID FROM [GeneralAffairs].[dbo].[Parking_Main] WHERE RentDate between '{0}' and '{1}'", Now_M_FirstDay, Now_M15_FirstDay);
+            OutputFormat OF_1 = DBHelper.GetDate(sql);
+            //3.找出非上月16號後與當月起租的資料->排除1和2的員工資料 
+            foreach (DataRow row in OF.OutputTable.Rows)
+            {
+                string OwnerEPID = row["OwnerEPID"].ToString();
+                NowMon_EPlist.Add(OwnerEPID);
+            }
+            sql = String.Format("SELECT * FROM [GeneralAffairs].[dbo].[Parking_Main] ORDER BY ParkingType,RentDate");
+            OutputFormat OF_2 = DBHelper.GetDate(sql);
+           
+            foreach (DataRow row in OF_2.OutputTable.Rows)
+            {
+                string OwerName = row["OwerName"].ToString();
+                if (!String.IsNullOrEmpty(OwerName))
+                {
+                    No++;
+                    DataRow NewRow = RentTable.NewRow();
+                    string ParkingType_str = "";
+                    string ParkingType = row["ParkingType"].ToString();
+                    string OwnerEPID = row["OwnerEPID"].ToString();
+                    string CostCenter = row["CostCenter"].ToString();
+                    string HireType = row["HireType"].ToString();
+                    string RentDate = row["RentDate"].ToString();
+                  
+                    if (!LastMon_EPlist.Contains(OwnerEPID) && !NowMon_EPlist.Contains(OwnerEPID))
+                    {
+                        //整月
+                        if (ParkingType == "CAR")
+                        {
+                            ParkingType_str = "汽車";
+                            self_Payment = CAR_Rent;
+                            SubsidyVAT = CAR_Subsidy;
+                            Subsidy = Convert.ToInt32(Math.Round((SubsidyVAT / 1.05), 0));
+                        }
+                        else
+                        {
+                            ParkingType_str = "機車";
+                            self_Payment = Scooter_Rent;
+                            SubsidyVAT = Scooter_Subsidy;
+                            Subsidy = Convert.ToInt32(Math.Round((SubsidyVAT / 1.05), 0));
+                        }
+                    }
+                    else
+                    {
+                        DateTime StartDate = Convert.ToDateTime(RentDate);
+                        DateTime EndDate = new DateTime();
+                        double TotalDays = 0;
+                        if (LastMon_EPlist.Contains(OwnerEPID))
+                        {
+                            //上個月
+                            TotalDays = DateTime.DaysInMonth(DateTime.Today.Year, DateTime.Today.AddMonths(-1).Month);
+                            EndDate = Convert.ToDateTime(Last_M_LastDay);
+
+                        }
+                        else
+                        {
+                            //當月
+                            TotalDays = DateTime.DaysInMonth(DateTime.Today.Year, DateTime.Today.Month);
+                            EndDate = Convert.ToDateTime(Now_M_LastDay);
+                        }
+                        TimeSpan ts = DateDiff(EndDate, StartDate);
+                        int Days = ts.Days;
+                        double AvgRent = 0;
+                        double AvgSubsidy = 0;
+                        if (ParkingType == "CAR")
+                        {
+                            ParkingType_str = "汽車";
+                            AvgRent = (CAR_Rent / TotalDays);
+                            AvgSubsidy = (CAR_Subsidy / TotalDays);
+
+                        }
+                        else
+                        {
+                            ParkingType_str = "機車";
+                            AvgRent = Scooter_Rent / TotalDays;
+                            AvgSubsidy = Scooter_Subsidy / TotalDays;
+                        }
+                        //上月須加上當月費用
+                       
+                        if (LastMon_EPlist.Contains(OwnerEPID))
+                        {
+                            int LastM_self_Payment = (int)Math.Round((Days * AvgRent), 0);
+                            int LastMSubsidyVAT = (int)Math.Round((Days * AvgSubsidy), 0);
+                            int LastMSubsidy = (int)Math.Round((Days * AvgSubsidy)/1.05,0);
+                            if (ParkingType == "CAR")
+                            {
+                                self_Payment = LastM_self_Payment + CAR_Rent;
+                                SubsidyVAT = LastMSubsidyVAT + CAR_Subsidy;
+                                Subsidy = LastMSubsidy + Convert.ToInt32(Math.Round((CAR_Subsidy / 1.05), 0));
+                            }
+                            else
+                            {
+                                self_Payment = LastM_self_Payment + Scooter_Rent;
+                                SubsidyVAT = LastMSubsidyVAT + Scooter_Subsidy;
+                                Subsidy = LastMSubsidy + Convert.ToInt32(Math.Round((Scooter_Subsidy / 1.05), 0));
+                            }
+                        }
+                    }
+
+                    NewRow["No"] = No;
+                    NewRow["OwerName"] = OwerName;
+                    NewRow["OwnerEPID"] = OwnerEPID;
+                    NewRow["CostCenter"] = CostCenter;
+                    NewRow["SelfPayment"] = self_Payment;
+                    NewRow["SubsidyVAT"] = SubsidyVAT;
+                    NewRow["Subsidy"] = Subsidy;
+                    NewRow["TotalPayment"] = self_Payment + SubsidyVAT;
+                    NewRow["ParkingType"] = ParkingType_str;
+                    NewRow["RentDate"] = RentDate;
+                    NewRow["DeptType"] = "";
+                    NewRow["HireType"] = HireType;
+                    RentTable.Rows.Add(NewRow);
+                }
+               
+            }
+            return RentTable;
+        }
+        public DataTable GetRentData2(RentData RD)
+        {
+            DataTable RentTable = new DataTable();
+            RentTable.Columns.Add("No", typeof(String));
+            RentTable.Columns.Add("申請人", typeof(String));
+            RentTable.Columns.Add("工號", typeof(String));
+            RentTable.Columns.Add("成本中心", typeof(String));
+            RentTable.Columns.Add("個人支付", typeof(String));
+            RentTable.Columns.Add("公司補助(含稅)", typeof(String));
+            RentTable.Columns.Add("公司補助(未稅)", typeof(String));
+            RentTable.Columns.Add("合計", typeof(String));
+            RentTable.Columns.Add("車種", typeof(String));
+            RentTable.Columns.Add("起租日", typeof(String));
+            RentTable.Columns.Add("單位別", typeof(String));
+            RentTable.Columns.Add("備註", typeof(String));
+
+            string sql = "";
+            DateTime now = DateTime.Now;
+            List<string> LastMon_EPlist = new List<string>();
+            List<string> NowMon_EPlist = new List<string>();
+            string Last_M16_FirstDay = DateTime.Now.AddMonths(-1).ToString("yyyy-MM-16");
+            string Last_M_LastDay = DateTime.Now.AddDays(-DateTime.Now.AddMonths(1).Day).ToString("yyyy-MM-dd");
+            string Now_M_FirstDay = DateTime.Now.AddDays(-DateTime.Now.Day + 1).ToString("yyyy-MM-dd");
+            string Now_M15_FirstDay = DateTime.Now.AddDays(-DateTime.Now.Day + 1).ToString("yyyy-MM-15");
+            string Now_M_LastDay = DateTime.Now.AddMonths(1).AddDays(-DateTime.Now.AddMonths(1).Day).ToString("yyyy-MM-dd");
+
+            int self_Payment = 0;
+            int Subsidy = 0;
+            int SubsidyVAT = 0;
+            int CAR_Rent = 750;
+            int CAR_Subsidy = 450;
+            int Scooter_Rent = 100;
+            int Scooter_Subsidy = 100;
+            int No = 0;
+            //0.找出當月15號前退租資料
+            sql = String.Format("SELECT * FROM [GeneralAffairs].[dbo].[Parking_Cancel] WHERE CancelDate between '{0}' and '{1}'", Now_M_FirstDay, Now_M15_FirstDay);
+            OutputFormat Cancel_OF = DBHelper.GetDate(sql);
+            foreach (DataRow row in Cancel_OF.OutputTable.Rows)
+            {
+                No++;
+                string OwerName = row["OwerName"].ToString();
+                string ParkingType_str = "";
+                string ParkingType = row["ParkingType"].ToString();
+                string OwnerEPID = row["OwnerEPID"].ToString();
+                string CostCenter = row["CostCenter"].ToString();
+                string HireType = row["HireType"].ToString();
+                string RentDate = row["RentDate"].ToString();
+                string Remark = row["Remark"].ToString();
+                string CancelDate = row["CancelDate"].ToString();
+                string[] CancelDate_arr = CancelDate.Split('-');
+
+                double days = Convert.ToInt32(CancelDate_arr[2]);
+                int TotalDays = DateTime.DaysInMonth(DateTime.Today.Year, DateTime.Today.Month);
+                double AvgRent = 0;
+                double AvgSubsidy = 0;
+                if (ParkingType == "CAR")
+                {
+                    ParkingType_str = "汽車";
+                    AvgRent = (CAR_Rent / TotalDays);
+                    AvgSubsidy = (CAR_Subsidy / TotalDays);
+                }
+                else
+                {
+                    ParkingType_str = "機車";
+                    AvgRent = Scooter_Rent / TotalDays;
+                    AvgSubsidy = Scooter_Subsidy / TotalDays;
+                }
+                self_Payment = (int)(Math.Round((days * AvgRent), 0));
+                SubsidyVAT = (int)(Math.Round((days * AvgSubsidy), 0));
+                Subsidy = (int)(Math.Round((days * (AvgSubsidy / 1.05)), 0));
+                DataRow NewRow = RentTable.NewRow();
+                NewRow["No"] = No;
+                NewRow["申請人"] = OwerName;
+                NewRow["工號"] = OwnerEPID;
+                NewRow["成本中心"] = CostCenter;
+                NewRow["個人支付"] = self_Payment;
+                NewRow["公司補助(含稅)"] = SubsidyVAT;
+                NewRow["公司補助(未稅)"] = Subsidy;
+                NewRow["合計"] = self_Payment + SubsidyVAT;
+                NewRow["車種"] = ParkingType_str;
+                NewRow["起租日"] = RentDate;
+                NewRow["單位別"] = "";
+                NewRow["備註"] = HireType + " 退租日:" + CancelDate + " " + Remark;
+                RentTable.Rows.Add(NewRow);
+            }
+            //1.找出上個月16號以後起租的資料-> (月費/月總天數)*(月底日-起租日) 
+            sql = String.Format("SELECT OwnerEPID FROM [GeneralAffairs].[dbo].[Parking_Main] WHERE RentDate between '{0}' and '{1}'", Last_M16_FirstDay, Last_M_LastDay);
+            OutputFormat OF = DBHelper.GetDate(sql);
+            foreach (DataRow row in OF.OutputTable.Rows)
+            {
+                string OwnerEPID = row["OwnerEPID"].ToString();
+                LastMon_EPlist.Add(OwnerEPID);
+            }
+
+            //2.找出當月15以前起租的資料-> (月費/月總天數)*(月底日-起租日) 
+            sql = String.Format("SELECT OwnerEPID FROM [GeneralAffairs].[dbo].[Parking_Main] WHERE RentDate between '{0}' and '{1}'", Now_M_FirstDay, Now_M15_FirstDay);
+            OutputFormat OF_1 = DBHelper.GetDate(sql);
+            //3.找出非上月16號後與當月起租的資料->排除1和2的員工資料 
+            foreach (DataRow row in OF.OutputTable.Rows)
+            {
+                string OwnerEPID = row["OwnerEPID"].ToString();
+                NowMon_EPlist.Add(OwnerEPID);
+            }
+            sql = String.Format("SELECT * FROM [GeneralAffairs].[dbo].[Parking_Main] ORDER BY ParkingType,RentDate");
+            OutputFormat OF_2 = DBHelper.GetDate(sql);
+
+            foreach (DataRow row in OF_2.OutputTable.Rows)
+            {
+                string OwerName = row["OwerName"].ToString();
+                if (!String.IsNullOrEmpty(OwerName))
+                {
+                    No++;
+                    DataRow NewRow = RentTable.NewRow();
+                    string ParkingType_str = "";
+                    string ParkingType = row["ParkingType"].ToString();
+                    string OwnerEPID = row["OwnerEPID"].ToString();
+                    string CostCenter = row["CostCenter"].ToString();
+                    string HireType = row["HireType"].ToString();
+                    string RentDate = row["RentDate"].ToString();
+
+                    if (!LastMon_EPlist.Contains(OwnerEPID) && !NowMon_EPlist.Contains(OwnerEPID))
+                    {
+                        //整月
+                        if (ParkingType == "CAR")
+                        {
+                            ParkingType_str = "汽車";
+                            self_Payment = CAR_Rent;
+                            SubsidyVAT = CAR_Subsidy;
+                            Subsidy = Convert.ToInt32(Math.Round((SubsidyVAT / 1.05), 0));
+                        }
+                        else
+                        {
+                            ParkingType_str = "機車";
+                            self_Payment = Scooter_Rent;
+                            SubsidyVAT = Scooter_Subsidy;
+                            Subsidy = Convert.ToInt32(Math.Round((SubsidyVAT / 1.05), 0));
+                        }
+                    }
+                    else
+                    {
+                        DateTime StartDate = Convert.ToDateTime(RentDate);
+                        DateTime EndDate = new DateTime();
+                        double TotalDays = 0;
+                        if (LastMon_EPlist.Contains(OwnerEPID))
+                        {
+                            //上個月
+                            TotalDays = DateTime.DaysInMonth(DateTime.Today.Year, DateTime.Today.AddMonths(-1).Month);
+                            EndDate = Convert.ToDateTime(Last_M_LastDay);
+
+                        }
+                        else
+                        {
+                            //當月
+                            TotalDays = DateTime.DaysInMonth(DateTime.Today.Year, DateTime.Today.Month);
+                            EndDate = Convert.ToDateTime(Now_M_LastDay);
+                        }
+                        TimeSpan ts = DateDiff(EndDate, StartDate);
+                        int Days = ts.Days;
+                        double AvgRent = 0;
+                        double AvgSubsidy = 0;
+                        if (ParkingType == "CAR")
+                        {
+                            ParkingType_str = "汽車";
+                            AvgRent = (CAR_Rent / TotalDays);
+                            AvgSubsidy = (CAR_Subsidy / TotalDays);
+
+                        }
+                        else
+                        {
+                            ParkingType_str = "機車";
+                            AvgRent = Scooter_Rent / TotalDays;
+                            AvgSubsidy = Scooter_Subsidy / TotalDays;
+                        }
+                        //上月須加上當月費用
+
+                        if (LastMon_EPlist.Contains(OwnerEPID))
+                        {
+                            int LastM_self_Payment = (int)Math.Round((Days * AvgRent), 0);
+                            int LastMSubsidyVAT = (int)Math.Round((Days * AvgSubsidy), 0);
+                            int LastMSubsidy = (int)Math.Round((Days * AvgSubsidy) / 1.05, 0);
+                            if (ParkingType == "CAR")
+                            {
+                                self_Payment = LastM_self_Payment + CAR_Rent;
+                                SubsidyVAT = LastMSubsidyVAT + CAR_Subsidy;
+                                Subsidy = LastMSubsidy + Convert.ToInt32(Math.Round((CAR_Subsidy / 1.05), 0));
+                            }
+                            else
+                            {
+                                self_Payment = LastM_self_Payment + Scooter_Rent;
+                                SubsidyVAT = LastMSubsidyVAT + Scooter_Subsidy;
+                                Subsidy = LastMSubsidy + Convert.ToInt32(Math.Round((Scooter_Subsidy / 1.05), 0));
+                            }
+                        }
+                    }
+
+                    NewRow["No"] = No;
+                    NewRow["申請人"] = OwerName;
+                    NewRow["工號"] = OwnerEPID;
+                    NewRow["成本中心"] = CostCenter;
+                    NewRow["個人支付"] = self_Payment;
+                    NewRow["公司補助(含稅)"] = SubsidyVAT;
+                    NewRow["公司補助(未稅)"] = Subsidy;
+                    NewRow["合計"] = self_Payment + SubsidyVAT;
+                    NewRow["車種"] = ParkingType_str;
+                    NewRow["起租日"] = RentDate;
+                    NewRow["單位別"] = "";
+                    NewRow["備註"] = HireType;
+                    RentTable.Rows.Add(NewRow);
+                }
+
+            }
+            return RentTable;
+        }
+        private TimeSpan DateDiff(DateTime DateTime1, DateTime DateTime2)
+        {
+            string dateDiff = null;
+            TimeSpan ts1 = new TimeSpan(DateTime1.Ticks);
+            TimeSpan ts2 = new TimeSpan(DateTime2.Ticks);
+            TimeSpan ts = ts1.Subtract(ts2).Duration();
+            //dateDiff = ts.Days.ToString() + "天" + ts.Hours.ToString() + "小時" + ts.Minutes.ToString() + "分鐘" + ts.Seconds.ToString() + "秒";
+            return ts;
+        }
+        public DataTable GetCancelData(CustomerData CD)
+        {
+            string subsql = "";
+            if (!String.IsNullOrEmpty(CD.ParkingFloor))
+            {
+                subsql += String.Format(" AND ParkingFloor ='{0}'", CD.ParkingFloor);
+            }
+      if (!String.IsNullOrEmpty(CD.ParkingNum))
+            {
+                subsql += String.Format(" AND ParkingNum ='{0}'", CD.ParkingNum);
+            }
+            if (!String.IsNullOrEmpty(CD.ParkingType))
+            {
+                subsql += String.Format(" AND ParkingType ='{0}'", CD.ParkingType);
+            }
+            if (!String.IsNullOrEmpty(CD.OwerName))
+            {
+                subsql += String.Format(" AND OwerName ='{0}'", CD.OwerName);
+            }
+            if (!String.IsNullOrEmpty(CD.OwnerEPID))
+            {
+                subsql += String.Format(" AND OwnerEPID ='{0}'", CD.OwnerEPID);
+            }
+            if (!String.IsNullOrEmpty(CD.LicensePlateNum1))
+            {
+                subsql += String.Format(" AND (LicensePlateNum1 ='{0}' OR LicensePlateNum2 ='{0}') ", CD.LicensePlateNum1);
+            }
+            string sql = String.Format("SELECT [ParkingFloor] ,[ParkingType] ,[ParkingNum] ,[LicensePlateNum1] ,[LicensePlateNum2] ,[OwnerEPID] ,[OwerName] ,[CostCenter] ,[CardNum] ,[HireType] ,[Dept] ,[CardActiveDate] ,[RentDate] ,[CancelDate] ,[Remark] FROM [GeneralAffairs].[dbo].[Parking_Cancel] where ParkingNum is not null {0} ;", subsql);
+            OutputFormat OF = DBHelper.GetDate(sql);
+                  return OF.OutputTable;
+        }
+        public OutputFormat Delete_Customer(CustomerData CD)
+        {
+            string sql = "";
+            OutputFormat OF =null;
+            //取得原始資訊
+            sql = String.Format("SELECT ParkingFloor,ParkingType,ParkingNum,OwerName,OwnerEPID,CostCenter,CardNum,Dept,HireType,LicensePlateNum1,LicensePlateNum2,CardActiveDate,RentDate FROM [GeneralAffairs].[dbo].[Parking_Main] WHERE ParkingFloor ='{0}' AND ParkingType ='{1}' AND ParkingNum ='{2}'; ", CD.ParkingFloor, CD.ParkingType, CD.ParkingNum);
+            OF = DBHelper.GetDate(sql);
+            //新增退租紀錄
+            string CancelDate = DateTime.Now.ToString("yyyy-MM-dd");
+            foreach (DataRow row in OF.OutputTable.Rows)
+            {
+                sql = String.Format("INSERT INTO [GeneralAffairs].[dbo].[Parking_Cancel] (ParkingFloor,ParkingType,ParkingNum,OwerName,OwnerEPID,CostCenter,CardNum,Dept,HireType,LicensePlateNum1,LicensePlateNum2,CardActiveDate,RentDate,CancelDate) VALUES('{0}','{1}','{2}','{3}','{4}','{5}','{6}','{7}','{8}','{9}','{10}','{11}','{12}','{13}');", row["ParkingFloor"], row["ParkingType"], row["ParkingNum"], row["OwerName"], row["OwnerEPID"], row["CostCenter"], row["CardNum"], row["Dept"], row["HireType"], row["LicensePlateNum1"], row["LicensePlateNum2"], row["CardActiveDate"], row["RentDate"], CancelDate);
+                OF = DBHelper.ExecuteSql(sql);
+            }
+            //清空車位資料
+            sql = String.Format("UPDATE [GeneralAffairs].[dbo].[Parking_Main] SET OwerName ='',OwnerEPID ='',CostCenter ='', CardNum ='', Dept = '' , HireType = '' , LicensePlateNum1 ='' , LicensePlateNum2 ='' , CardActiveDate ='' ,RentDate = '', Enable ='N'  WHERE ParkingFloor ='{0}' AND ParkingType ='{1}' AND ParkingNum ='{2}'; ", CD.ParkingFloor, CD.ParkingType, CD.ParkingNum);
+            OF = DBHelper.GetDate(sql);
+            return OF;
+        }
+        public OutputFormat Add_Customer(CustomerData CD)
+        {
+            string sql = String.Format("UPDATE [GeneralAffairs].[dbo].[Parking_Main] SET OwerName ='{3}',OwnerEPID ='{4}',CostCenter ='{5}', CardNum ='{6}', Dept = '{7}' , HireType = '{8}' , LicensePlateNum1 ='{9}' , LicensePlateNum2 ='{10}' , CardActiveDate ='{11}' ,RentDate = '{12}', Enable ='Y'  WHERE ParkingFloor ='{0}' AND ParkingType ='{1}' AND ParkingNum ='{2}'; ",CD.ParkingFloor,CD.ParkingType,CD.ParkingNum,CD.OwerName,CD.OwnerEPID,CD.CostCenter,CD.CardNum,CD.Dept,CD.HireType,CD.LicensePlateNum1,CD.LicensePlateNum2,CD.CardActiveDate,CD.RentDate);
+            OutputFormat OF = DBHelper.GetDate(sql);
+            return OF;
+        }
+        public DataTable GetCustomerData(CustomerData CD)
+        {
+            string sql = "";
+            string subsql = "";
+            if (!String.IsNullOrEmpty(CD.ParkingFloor))
+            {
+                subsql += String.Format(" AND ParkingFloor ='{0}'", CD.ParkingFloor);
+            }
+            if (!String.IsNullOrEmpty(CD.ParkingNum))
+            {
+                subsql += String.Format(" AND ParkingNum ='{0}'", CD.ParkingNum);
+            }
+            if (!String.IsNullOrEmpty(CD.ParkingType))
+            {
+                subsql += String.Format(" AND ParkingType ='{0}'", CD.ParkingType);
+            }
+            if (!String.IsNullOrEmpty(CD.OwerName))
+            {
+                subsql += String.Format(" AND OwerName ='{0}'", CD.OwerName);
+            }
+            if (!String.IsNullOrEmpty(CD.OwnerEPID))
+            {
+                subsql += String.Format(" AND OwnerEPID ='{0}'", CD.OwnerEPID);
+            }
+            if (!String.IsNullOrEmpty(CD.LicensePlateNum1))
+            {
+                subsql += String.Format(" AND (LicensePlateNum1 ='{0}' OR LicensePlateNum2 ='{0}') ", CD.LicensePlateNum1);
+            }
+            sql = String.Format("SELECT [ParkingFloor] ,[ParkingType] ,[ParkingNum] ,[LicensePlateNum1] ,[LicensePlateNum2] ,[OwnerEPID] ,[OwerName] ,[CostCenter] ,[CardNum] ,[HireType] ,[Dept] ,[CardActiveDate] ,[RentDate] ,[Enable] FROM [GeneralAffairs].[dbo].[Parking_Main] where ParkingNum is not null {0} ORDER BY ParkingFloor,ParkingType,ParkingNum;", subsql);
+            OutputFormat OF = DBHelper.GetDate(sql);
+            return OF.OutputTable;
+        }
+        public string AddLayoutItem(ParkingPlaceData PPD)
+        {
+            if (PPD.PD.Length > 0)
+            {
+                //刪除舊資料
+                string sql = String.Format("DELETE FROM [GeneralAffairs].[dbo].[Parking_ItemData] WHERE Place ='{0}';", PPD.Place);
+                OutputFormat OF = DBHelper.GetDate(sql);
+                sql = "";
+                //新增當前資料
+                foreach (PlaceData PD in PPD.PD)
+                {
+                    sql += String.Format(@"INSERT INTO [GeneralAffairs].[dbo].[Parking_ItemData] (Place,ID,Width,Height,X,Y,Fill,ParkingNum,ParkingType,Enable)
+                                    VALUES('{0}','{1}','{2}','{3}','{4}','{5}','{6}','{7}','{8}','{9}');", PPD.Place, PD.ID, PD.Width, PD.Height, PD.X, PD.Y, PD.Fill, PD.ParkingNum,PD.ParkingType,PD.Enable);
+                }
+                OF = DBHelper.GetDate(sql);
+                return OF.Result;
+            }
+            else
+            {
+                return "";
+            }
+           
+        }
+        public DataTable LoadItemData(ParkingPlaceData PPD)
+        {
+            string sql = String.Format("SELECT Parking_ItemData.ID, Parking_ItemData.Width, Parking_ItemData.Height, Parking_ItemData.X, Parking_ItemData.Y, Parking_ItemData.Fill, Parking_ItemData.ParkingNum, Parking_ItemData.ParkingType,Parking_Main.Enable AS [Enable] FROM [GeneralAffairs].[dbo].[Parking_ItemData] INNER JOIN [GeneralAffairs].[dbo].[Parking_Main] ON Parking_ItemData.ParkingType = Parking_Main.ParkingType AND Parking_ItemData.ParkingNum = Parking_Main.ParkingNum AND Parking_ItemData.Place = Parking_Main.ParkingFloor WHERE Place = '{0}';", PPD.Place);
+            OutputFormat OF = DBHelper.GetDate(sql);
+            return OF.OutputTable;
+        }
+    }
+}
